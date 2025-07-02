@@ -48,7 +48,32 @@ class PodcastTranscriptDownloader:
         """Parse RSS feed to get episode information"""
         try:
             import feedparser
-            feed = feedparser.parse(feed_url)
+            print(f"Fetching RSS feed: {feed_url}")
+            
+            # First try to fetch the RSS feed directly
+            response = self.session.get(feed_url)
+            print(f"RSS feed HTTP status: {response.status_code}")
+            
+            if response.status_code != 200:
+                print(f"Failed to fetch RSS feed. Status code: {response.status_code}")
+                print(f"Response content: {response.text[:500]}...")
+                return None
+            
+            feed = feedparser.parse(response.content)
+            
+            # Debug information
+            print(f"Feed parsed successfully")
+            print(f"Feed title: {feed.feed.get('title', 'Unknown')}")
+            print(f"Feed description: {feed.feed.get('description', 'Unknown')[:100]}...")
+            print(f"Number of entries found: {len(feed.entries)}")
+            
+            if len(feed.entries) == 0:
+                print("No entries found in feed. This could mean:")
+                print("1. The RSS feed is empty or inactive")
+                print("2. The RSS feed URL is incorrect")
+                print("3. The feed format is not standard")
+                print(f"Feed keys: {list(feed.feed.keys())}")
+            
             return feed
         except ImportError:
             print("feedparser not installed. Install with: pip install feedparser")
