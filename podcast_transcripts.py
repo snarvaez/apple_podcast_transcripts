@@ -198,6 +198,10 @@ class PodcastTranscriptDownloader:
             import whisper
             import tempfile
             import os
+            import ssl
+            
+            # Fix SSL issues for Whisper model downloads
+            ssl._create_default_https_context = ssl._create_unverified_context
             
             print("  Downloading audio file...")
             
@@ -251,10 +255,23 @@ class PodcastTranscriptDownloader:
             file_size = os.path.getsize(temp_filename)
             print(f"  Downloaded {file_size} bytes")
             
-            print("  Transcribing with Whisper...")
+            print("  Loading Whisper model...")
             # Load Whisper model (downloads on first use)
-            model = whisper.load_model("base")  # Options: tiny, base, small, medium, large
+            # Set environment variable to bypass SSL for model downloads
+            os.environ['CURL_CA_BUNDLE'] = ''
+            os.environ['REQUESTS_CA_BUNDLE'] = ''
             
+            try:
+                model = whisper.load_model("base")  # Options: tiny, base, small, medium, large
+            except Exception as model_error:
+                print(f"  Error loading Whisper model: {model_error}")
+                print("  This might be a first-run model download issue.")
+                print("  Try running this command separately first:")
+                print("  python -c \"import whisper; whisper.load_model('base')\"")
+                os.unlink(temp_filename)
+                return None
+            
+            print("  Transcribing audio...")
             # Transcribe
             result = model.transcribe(temp_filename)
             
@@ -378,6 +395,13 @@ if __name__ == "__main__":
     # Required dependencies
     print("Required dependencies:")
     print("pip install requests feedparser")
+    print("Please also install FFmpeg (https://ffmpeg.org/download.html) for audio processing")
+
+    #Install FFmpeg (required by Whisper):
+    #Windows: Download from https://ffmpeg.org/download.html
+    #Mac: brew install ffmpeg
+    #Linux: sudo apt install ffmpeg
+
     print("-" * 30)
     
     main()
