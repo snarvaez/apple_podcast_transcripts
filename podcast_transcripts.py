@@ -187,11 +187,20 @@ class PodcastTranscriptDownloader:
         print(f"Podcast: {podcast_info.get('collectionName', 'Unknown')}")
         print(f"By: {podcast_info.get('artistName', 'Unknown')}")
         
+        # Debug: Print all available keys
+        print(f"Available podcast info keys: {list(podcast_info.keys())}")
+        
         # Get RSS feed
         feed_url = podcast_info.get('feedUrl')
         if not feed_url:
-            print("No RSS feed URL found")
+            print("No RSS feed URL found in podcast info")
+            print("This could mean:")
+            print("1. The podcast doesn't provide an RSS feed")
+            print("2. The podcast has been discontinued")
+            print("3. The RSS feed is hosted elsewhere")
             return
+        
+        print(f"RSS Feed URL: {feed_url}")
         
         feed = self.get_rss_feed(feed_url)
         if not feed:
