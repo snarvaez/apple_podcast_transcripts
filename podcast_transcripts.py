@@ -269,12 +269,28 @@ class PodcastTranscriptDownloader:
         for i, entry in enumerate(feed.entries, 1):
             print(f"\nProcessing episode {i}/{len(feed.entries)}: {entry.title}")
             
+            # Extract audio URL from entry
+            audio_url = None
+            if hasattr(entry, 'enclosures') and entry.enclosures:
+                audio_url = entry.enclosures[0].href
+            elif hasattr(entry, 'links'):
+                for link in entry.links:
+                    if link.get('type', '').startswith('audio/'):
+                        audio_url = link.href
+                        break
+            
             episode_data = {
                 'title': entry.title,
                 'link': entry.link,
                 'published': entry.get('published', ''),
                 'description': entry.get('summary', ''),
+                'audio_url': audio_url,
             }
+            
+            if audio_url:
+                print(f"  Found audio URL: {audio_url[:50]}...")
+            else:
+                print("  No audio URL found")
             
             if self.download_transcript(episode_data, output_dir):
                 successful_downloads += 1
