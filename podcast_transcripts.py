@@ -12,6 +12,9 @@ import os
 from urllib.parse import urlparse, parse_qs
 import re
 from datetime import datetime
+import ssl
+import urllib.request
+from urllib.error import URLError
 
 class PodcastTranscriptDownloader:
     def __init__(self):
