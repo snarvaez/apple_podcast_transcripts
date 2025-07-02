@@ -200,15 +200,56 @@ class PodcastTranscriptDownloader:
             import os
             
             print("  Downloading audio file...")
-            # Download audio file
-            response = self.session.get(audio_url, stream=True)
-            response.raise_for_status()
             
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
-                for chunk in response.iter_content(chunk_size=8192):
-                    temp_file.write(chunk)
-                temp_filename = temp_file.name
+            # Try multiple methods to download the audio file
+            temp_filename = None
+            
+            # Method 1: Use requests with SSL disabled
+            try:
+                response = self.session.get(audio_url, stream=True, verify=False, timeout=30)
+                response.raise_for_status()
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        temp_file.write(chunk)
+                    temp_filename = temp_file.name
+                    
+            except Exception as e:
+                print(f"    Method 1 failed: {e}")
+                
+                # Method 2: Use urllib with SSL context disabled
+                try:
+                    print("  Trying alternative download method...")
+                    ssl_context = ssl.create_default_context()
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_NONE
+                    
+                    req = urllib.request.Request(audio_url, headers={
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+                    })
+                    
+                    with urllib.request.urlopen(req, context=ssl_context, timeout=30) as response:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
+                            temp_file.write(response.read())
+                            temp_filename = temp_file.name
+                            
+                except Exception as e2:
+                    print(f"    Method 2 also failed: {e2}")
+                    return None
+            
+            if not temp_filename:
+                print("  Failed to download audio file")
+                return None
+                
+            # Check if file was actually downloaded
+            if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
+                print("  Downloaded file is empty or doesn't exist")
+                if os.path.exists(temp_filename):
+                    os.unlink(temp_filename)
+                return None
+            
+            file_size = os.path.getsize(temp_filename)
+            print(f"  Downloaded {file_size} bytes")
             
             print("  Transcribing with Whisper...")
             # Load Whisper model (downloads on first use)
@@ -228,6 +269,9 @@ class PodcastTranscriptDownloader:
             return None
         except Exception as e:
             print(f"  Error during transcription: {e}")
+            # Clean up temp file if it exists
+            if 'temp_filename' in locals() and temp_filename and os.path.exists(temp_filename):
+                os.unlink(temp_filename)
             return None
     
     def download_all_transcripts(self, apple_podcast_url, output_dir="transcripts"):
