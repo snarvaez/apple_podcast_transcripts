@@ -22,6 +22,12 @@ class PodcastTranscriptDownloader:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         })
+        # Disable SSL verification for problematic podcast hosts
+        self.session.verify = False
+        
+        # Suppress SSL warnings
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
     def extract_podcast_id(self, apple_podcast_url):
         """Extract podcast ID from Apple Podcasts URL"""
