@@ -125,29 +125,34 @@ class PodcastTranscriptDownloader:
             return False
     
     def fetch_transcript_content(self, episode_data):
-        """Fetch actual transcript content - implementation varies by platform"""
-        # This is where you'd implement platform-specific transcript fetching
-        # Examples of transcript sources:
-        
-        # 1. Direct transcript URLs (some podcasts provide these)
-        # 2. Embedded JSON-LD data in episode pages
-        # 3. Third-party transcript services
-        # 4. Podcast-specific APIs
-        
-        # Placeholder implementation
+        """Fetch actual transcript content - now with AI transcription option"""
         episode_url = episode_data.get('link', '')
+        audio_url = episode_data.get('audio_url', '')
+        
+        # Method 1: Look for existing transcripts in episode page
+        transcript = self.check_existing_transcript(episode_url)
+        if transcript:
+            return transcript
+        
+        # Method 2: AI Transcription (if audio URL available)
+        if audio_url:
+            print(f"  Attempting AI transcription for audio: {audio_url[:50]}...")
+            return self.transcribe_audio_with_whisper(audio_url)
+        
+        return None
+    
+    def check_existing_transcript(self, episode_url):
+        """Check for existing transcripts on episode page"""
         if not episode_url:
             return None
         
         try:
-            # Try to find transcript in episode page
             response = self.session.get(episode_url)
             response.raise_for_status()
-            
-            # Look for common transcript patterns
             content = response.text
             
-            # Check for JSON-LD transcript data
+            # Look for common transcript patterns
+            # JSON-LD structured data
             json_ld_match = re.search(r'<script type="application/ld\+json">(.*?)</script>', content, re.DOTALL)
             if json_ld_match:
                 try:
@@ -157,13 +162,63 @@ class PodcastTranscriptDownloader:
                 except:
                     pass
             
-            # Check for other transcript indicators
-            # This would need to be customized per podcast platform
+            # Look for transcript divs/sections
+            transcript_patterns = [
+                r'<div[^>]*class="[^"]*transcript[^"]*"[^>]*>(.*?)</div>',
+                r'<section[^>]*class="[^"]*transcript[^"]*"[^>]*>(.*?)</section>',
+                r'<div[^>]*id="transcript"[^>]*>(.*?)</div>'
+            ]
+            
+            for pattern in transcript_patterns:
+                match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+                if match:
+                    # Clean up HTML
+                    import html
+                    transcript = re.sub(r'<[^>]+>', '', match.group(1))
+                    return html.unescape(transcript.strip())
             
             return None
             
         except Exception as e:
-            print(f"Error fetching transcript content: {e}")
+            print(f"  Error checking for existing transcript: {e}")
+            return None
+    
+    def transcribe_audio_with_whisper(self, audio_url):
+        """Transcribe audio using OpenAI Whisper (requires openai-whisper package)"""
+        try:
+            import whisper
+            import tempfile
+            import os
+            
+            print("  Downloading audio file...")
+            # Download audio file
+            response = self.session.get(audio_url, stream=True)
+            response.raise_for_status()
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    temp_file.write(chunk)
+                temp_filename = temp_file.name
+            
+            print("  Transcribing with Whisper...")
+            # Load Whisper model (downloads on first use)
+            model = whisper.load_model("base")  # Options: tiny, base, small, medium, large
+            
+            # Transcribe
+            result = model.transcribe(temp_filename)
+            
+            # Clean up temp file
+            os.unlink(temp_filename)
+            
+            return result["text"]
+            
+        except ImportError:
+            print("  Whisper not installed. Install with: pip install openai-whisper")
+            print("  Note: This also requires ffmpeg to be installed on your system")
+            return None
+        except Exception as e:
+            print(f"  Error during transcription: {e}")
             return None
     
     def download_all_transcripts(self, apple_podcast_url, output_dir="transcripts"):
