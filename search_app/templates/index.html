@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block body %}
+<header class="mast">
+  <p class="kicker">Atlas Search · Voyage auto-embed</p>
+  <h1>Find the episode. Hear the passage.</h1>
+  <p class="lede">Search test podcast transcripts by topic. Keyword matches use Atlas Search; related meaning uses Voyage AI embeddings generated inside MongoDB Atlas.</p>
+</header>
+
+<form id="search-form" class="search-form" action="/api/search" method="get" role="search">
+  <label class="sr-only" for="q">Search transcripts</label>
+  <input id="q" name="q" type="search" placeholder="Try ransomware, CRISPR, sticky inflation…" autocomplete="off" autofocus>
+  <button type="submit">Search</button>
+</form>
+
+<ul class="chips" id="sample-queries">
+  {% for sample in sample_queries %}
+  <li><button type="button" class="chip" data-query="{{ sample }}">{{ sample }}</button></li>
+  {% endfor %}
+</ul>
+
+<p class="status" id="status" hidden></p>
+<div id="results" class="results" aria-live="polite"></div>
+{% endblock %}
