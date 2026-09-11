@@ -1,4 +1,5 @@
 from search_app.chunking import chunk_transcript
+from search_app.srt import srt_to_text
 from search_app.search import group_by_episode, highlight_html, reciprocal_rank_fusion
 from search_app.transcripts import SNIPPETS
 
@@ -82,6 +83,18 @@ def test_snippets_are_uniquely_keyed():
     keys = [(s["episode_id"], s["chunk_index"]) for s in SNIPPETS]
     assert len(keys) == len(set(keys))
     assert all(s["text"].strip() for s in SNIPPETS)
+
+
+def test_srt_to_text_strips_indexes_and_timestamps():
+    srt = """1
+00:00:11,120 --> 00:00:14,040
+Hello everyone.
+
+2
+00:00:14,040 --> 00:00:17,200
+Welcome to <b>MongoDB</b>.
+"""
+    assert srt_to_text(srt) == "Hello everyone. Welcome to MongoDB."
 
 
 def test_chunk_transcript_respects_max_chars():

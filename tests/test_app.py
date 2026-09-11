@@ -1,7 +1,11 @@
 from search_app import create_app
+from search_app.config import Config
+from search_app.db import close_client
 
 
 def test_home_renders_without_mongo():
+    Config.MONGODB_URI = ""
+    close_client()
     app = create_app()
     app.config["TESTING"] = True
     client = app.test_client()
@@ -12,6 +16,8 @@ def test_home_renders_without_mongo():
 
 
 def test_search_without_mongo_is_service_unavailable():
+    Config.MONGODB_URI = ""
+    close_client()
     app = create_app()
     app.config["TESTING"] = True
     client = app.test_client()

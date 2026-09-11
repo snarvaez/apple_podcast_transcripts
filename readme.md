@@ -79,6 +79,18 @@ Gunicorn binds `127.0.0.1:8000`. `deploy/nginx.conf` reverse-proxies port 80 to 
 
 Each Gunicorn worker process owns one `MongoClient` (created after fork; `preload_app = False`). Pool settings are in `search_app/db.py`.
 
+### Ingest The MongoDB Podcast
+
+```bash
+python -m search_app.ingest
+```
+
+Pulls the RSS feed for [The MongoDB Podcast](https://podcasts.apple.com/us/podcast/the-mongodb-podcast/id1500452446) and stores Spotify `podcast:transcript` SRT files as chunked documents. Episodes without an SRT can be transcribed on Apple Silicon (ffmpeg + mlx-whisper):
+
+```bash
+python -m search_app.ingest --transcribe
+```
+
 ### Tests that do not need Atlas
 
 ```bash
