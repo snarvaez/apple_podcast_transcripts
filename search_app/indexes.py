@@ -12,8 +12,8 @@ from typing import Any
 from pymongo.collection import Collection
 from pymongo.operations import SearchIndexModel
 
-VECTOR_INDEX_NAME = "transcript_vector_index"
-SEARCH_INDEX_NAME = "transcript_search_index"
+VECTOR_INDEX_NAME = "podcast_vector_index"
+SEARCH_INDEX_NAME = "podcast_search_index"
 EMBEDDING_MODEL = "voyage-4"
 
 SNIPPET_VALIDATOR: dict[str, Any] = {
@@ -59,15 +59,31 @@ VECTOR_INDEX_DEFINITION: dict[str, Any] = {
     ]
 }
 
+def _string_with_fuzzy(analyzer: str = "lucene.english") -> dict[str, Any]:
+    # lucene.english stems ("gaming" → "game"), which blocks typos like
+    # "gsming". The `fuzzy` multi uses lucene.standard so $search fuzzy
+    # (maxEdits 1–2) can match the raw token.
+    return {
+        "type": "string",
+        "analyzer": analyzer,
+        "multi": {
+            "fuzzy": {
+                "type": "string",
+                "analyzer": "lucene.standard",
+            }
+        },
+    }
+
+
 SEARCH_INDEX_DEFINITION: dict[str, Any] = {
     "analyzer": "lucene.english",
     "searchAnalyzer": "lucene.english",
     "mappings": {
         "dynamic": False,
         "fields": {
-            "text": {"type": "string", "analyzer": "lucene.english"},
-            "episode_title": {"type": "string", "analyzer": "lucene.english"},
-            "podcast_title": {"type": "string", "analyzer": "lucene.english"},
+            "text": _string_with_fuzzy(),
+            "episode_title": _string_with_fuzzy(),
+            "podcast_title": _string_with_fuzzy(),
             "podcast_id": {"type": "token"},
             "episode_id": {"type": "token"},
         },
@@ -126,12 +142,13 @@ def ensure_search_indexes(
     }
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
-        existing = _existing_search_names(collection) or set()
-        pending = [model for name, model in models.items() if name not in existing]
-        if not pending:
-            return
         try:
-            collection.create_search_indexes(pending)
+            existing = _existing_search_names(collection) or set()
+            pending = [model for name, model in models.items() if name not in existing]
+            if pending:
+                collection.create_search_indexes(pending)
+            if search_name in existing:
+                collection.update_search_index(search_name, SEARCH_INDEX_DEFINITION)
             return
         except Exception as exc:
             last_error = exc

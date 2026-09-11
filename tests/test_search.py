@@ -1,7 +1,32 @@
 from search_app.chunking import chunk_transcript
 from search_app.srt import srt_to_text
-from search_app.search import group_by_episode, highlight_html, reciprocal_rank_fusion
+from search_app.search import (
+    FUZZY,
+    group_by_episode,
+    highlight_html,
+    lexical_pipeline,
+    levenshtein,
+    reciprocal_rank_fusion,
+)
 from search_app.transcripts import SNIPPETS
+
+
+def test_lexical_pipeline_uses_fuzzy_on_standard_multi_fields():
+    pipeline = lexical_pipeline("gsming", "podcast_search_index", 10)
+    clauses = pipeline[0]["$search"]["compound"]["should"]
+    fuzzy_paths = {
+        clause["text"]["path"]
+        for clause in clauses
+        if clause["text"].get("fuzzy")
+    }
+    assert "episode_title.fuzzy" in fuzzy_paths
+    assert "text.fuzzy" in fuzzy_paths
+    assert FUZZY["maxEdits"] == 2
+    assert FUZZY["prefixLength"] == 0
+
+
+def test_levenshtein_gsming_gaming():
+    assert levenshtein("gsming", "gaming") == 1
 
 
 def test_rrf_prefers_docs_in_both_lists():

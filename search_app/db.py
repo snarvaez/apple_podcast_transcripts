@@ -6,6 +6,7 @@ Do not create a client per request — handshake + TLS is 50–500ms.
 
 from __future__ import annotations
 
+import certifi
 from flask import current_app, g
 from pymongo import MongoClient
 from pymongo.collection import Collection
@@ -16,22 +17,26 @@ _client: MongoClient | None = None
 
 
 def _build_client(uri: str) -> MongoClient:
-    # Pool and timeouts assume a small Gunicorn deployment (2–4 sync workers)
-    # talking to Atlas over the public internet, not a serverless function.
+    # macOS system Python 3.9 ships LibreSSL 2.8.3, which can stall TLS
+    # handshakes to Atlas. Pin certifi's CA bundle and bound every wait so a
+    # hung SSL socket cannot freeze the search UI.
     return MongoClient(
         uri,
         server_api=ServerApi("1"),
-        # Peak concurrent ops per worker for this search UI is low; 20 leaves
-        # headroom without holding idle sockets on Atlas (~1MB RAM each).
-        maxPoolSize=20,
-        # One warmed socket so the first search after a quiet period is not a
-        # full handshake. Keep this at 0 if workers sit idle for hours.
-        minPoolSize=1,
-        # Drop idle sockets before typical NAT / load-balancer idle timeouts.
-        maxIdleTimeMS=60_000,
-        connectTimeoutMS=10_000,
-        serverSelectionTimeoutMS=5_000,
+        tls=True,
+        tlsCAFile=certifi.where(),
+        # Peak concurrent ops per worker for this search UI is low.
+        maxPoolSize=10,
+        # Do not keep idle TLS sockets; LibreSSL + Atlas had handshake timeouts
+        # on recycled connections.
+        minPoolSize=0,
+        maxIdleTimeMS=30_000,
+        connectTimeoutMS=8_000,
+        serverSelectionTimeoutMS=8_000,
+        socketTimeoutMS=18_000,
+        timeoutMS=20_000,
         retryWrites=True,
+        retryReads=True,
         appname="podcast-transcript-search",
     )
 

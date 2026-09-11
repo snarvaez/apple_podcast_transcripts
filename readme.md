@@ -16,7 +16,7 @@ Search is hybrid:
 
 ### Data model
 
-Episode transcripts are unbounded, so they are **not** stored as a growing array on a podcast document (that would blow past the 16MB BSON limit and wreck the working set). Each searchable passage is its own small document in `Podcasts.transcripts`, with podcast and episode fields denormalized so a search hit does not need `$lookup`.
+Episode transcripts are unbounded, so they are **not** stored as a growing array on a podcast document (that would blow past the 16MB BSON limit and wreck the working set). Each searchable passage is its own small document in `TechDrip.podcasts`, with podcast and episode fields denormalized so a search hit does not need `$lookup`.
 
 ```json
 {
@@ -36,8 +36,8 @@ Indexes:
 
 | Name | Type | Purpose |
 |------|------|---------|
-| `transcript_search_index` | Atlas Search | Lexical search + highlighting |
-| `transcript_vector_index` | Vector Search `autoEmbed` | Voyage `voyage-4` embeddings on `text` |
+| `podcast_search_index` | Atlas Search | Lexical search + highlighting + fuzzy multi-fields |
+| `podcast_vector_index` | Vector Search `autoEmbed` | Voyage `voyage-4` embeddings on `text` |
 | `episode_chunk` | Classic unique | Idempotent seeding |
 | `podcast_published` | Classic | Listing by show |
 

@@ -5,10 +5,18 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+import re
+
 from pymongo.collection import Collection
 from pymongo.errors import OperationFailure, PyMongoError
 
+LEXICAL_MAX_TIME_MS = 15_000
+
 VECTOR_CANDIDATES_MULTIPLIER = 20
+
+# prefixLength 0 is required for first-letter typos ("gsming" vs "gaming").
+# maxEdits 2 is the Atlas Search cap (Levenshtein).
+FUZZY = {"maxEdits": 2, "prefixLength": 0, "maxExpansions": 50}
 
 
 def lexical_pipeline(query: str, index: str, limit: int) -> list[dict[str, Any]]:
@@ -18,13 +26,7 @@ def lexical_pipeline(query: str, index: str, limit: int) -> list[dict[str, Any]]
                 "index": index,
                 "compound": {
                     "should": [
-                        {
-                            "text": {
-                                "query": query,
-                                "path": "text",
-                                "fuzzy": {"maxEdits": 1, "prefixLength": 2},
-                            }
-                        },
+                        {"text": {"query": query, "path": "text"}},
                         {
                             "text": {
                                 "query": query,
@@ -35,16 +37,24 @@ def lexical_pipeline(query: str, index: str, limit: int) -> list[dict[str, Any]]
                         {
                             "text": {
                                 "query": query,
-                                "path": "podcast_title",
-                                "score": {"boost": {"value": 1.4}},
+                                "path": "episode_title.fuzzy",
+                                "fuzzy": FUZZY,
+                                "score": {"boost": {"value": 2.2}},
+                            }
+                        },
+                        {
+                            "text": {
+                                "query": query,
+                                "path": "text.fuzzy",
+                                "fuzzy": FUZZY,
+                                "score": {"boost": {"value": 0.8}},
                             }
                         },
                     ]
                 },
                 "highlight": {
-                    "path": "text",
-                    "maxNumPassages": 3,
-                    "maxCharsToExamine": 200_000,
+                    "path": ["text", "episode_title"],
+                    "maxNumPassages": 2,
                 },
             }
         },
@@ -354,6 +364,110 @@ def _annotate_match_types(
         doc["match_types"] = types
 
 
+def _run_aggregate(collection: Collection, pipeline: list[dict[str, Any]], max_time_ms: int):
+    return list(collection.aggregate(pipeline, maxTimeMS=max_time_ms))
+
+
+def levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        curr = [i]
+        for j, cb in enumerate(b, start=1):
+            ins, delete, sub = curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + (ca != cb)
+            curr.append(min(ins, delete, sub))
+        prev = curr
+    return prev[-1]
+
+
+def regex_fallback(
+    collection: Collection, query: str, limit: int
+) -> list[dict[str, Any]]:
+    """Last resort when Atlas Search / mongot is unreachable."""
+    pattern = re.compile(re.escape(query), re.I)
+    docs = list(
+        collection.find(
+            {
+                "$or": [
+                    {"episode_title": pattern},
+                    {"text": pattern},
+                ]
+            },
+            {
+                "podcast_id": 1,
+                "podcast_title": 1,
+                "podcast_author": 1,
+                "episode_id": 1,
+                "episode_title": 1,
+                "episode_url": 1,
+                "published_at": 1,
+                "chunk_index": 1,
+                "text": 1,
+            },
+        ).limit(limit)
+    )
+    for doc in docs:
+        doc["score"] = 1.0
+        doc["match_types"] = ["keyword"]
+        text = doc.get("text") or ""
+        marked = pattern.sub(lambda m: f"<mark>{_escape(m.group(0))}</mark>", text)
+        if "<mark>" not in marked:
+            marked = _escape(text[:420])
+        elif len(marked) > 800:
+            idx = marked.find("<mark>")
+            start = max(0, idx - 120)
+            marked = ("…" if start else "") + marked[start : start + 600]
+        doc["highlights"] = None
+        doc["snippet_html"] = marked
+    if docs:
+        return docs
+
+    token = query.strip().lower()
+    if not (token.isalpha() and 4 <= len(token) <= 16):
+        return []
+    # Title-only, 1 edit: "gsming"→"gaming" without matching "giving".
+    scanned = collection.find(
+        {},
+        {
+            "podcast_id": 1,
+            "podcast_title": 1,
+            "podcast_author": 1,
+            "episode_id": 1,
+            "episode_title": 1,
+            "episode_url": 1,
+            "published_at": 1,
+            "chunk_index": 1,
+            "text": 1,
+        },
+    )
+    fuzzy_docs: list[dict[str, Any]] = []
+    seen_episodes: set[str] = set()
+    for doc in scanned:
+        title = (doc.get("episode_title") or "").lower()
+        words = re.findall(r"[a-z0-9']+", title)
+        if any(
+            abs(len(token) - len(w)) <= 1 and levenshtein(token, w) == 1
+            for w in words
+        ):
+            eid = doc.get("episode_id")
+            if eid in seen_episodes:
+                continue
+            seen_episodes.add(eid)
+            doc["score"] = 0.5
+            doc["match_types"] = ["keyword"]
+            doc["highlights"] = None
+            doc["snippet_html"] = _escape((doc.get("text") or "")[:420])
+            fuzzy_docs.append(doc)
+            if len(fuzzy_docs) >= limit:
+                break
+    return fuzzy_docs
+
+
 def search_topic(
     collection: Collection,
     query: str,
@@ -364,61 +478,46 @@ def search_topic(
     limit: int,
     snippets_per_episode: int,
 ) -> dict[str, Any]:
+    _ = (vector_index, model)
     query = (query or "").strip()
     if not query:
         return {"query": query, "mode": None, "podcasts": [], "total_snippets": 0}
 
     lexical_docs: list[dict[str, Any]] = []
     vector_docs: list[dict[str, Any]] = []
-    mode = "rankFusion"
     warnings: list[str] = []
 
+    # Keyword-only on the request path. Voyage $vectorSearch shares the TLS
+    # pool and was stalling the whole request, so the browser timed out before
+    # lexical results could render.
     try:
-        fused = list(
-            collection.aggregate(
-                rank_fusion_pipeline(
-                    query,
-                    search_index=search_index,
-                    vector_index=vector_index,
-                    model=model,
-                    limit=limit,
-                )
-            )
+        lexical_docs = _run_aggregate(
+            collection,
+            lexical_pipeline(query, search_index, limit),
+            LEXICAL_MAX_TIME_MS,
         )
-        lexical_ids = {doc["_id"] for doc in fused if doc.get("highlights")}
-        if len(lexical_ids) < min(3, len(fused)):
-            lexical_docs = list(
-                collection.aggregate(lexical_pipeline(query, search_index, limit))
-            )
-            highlight_by_id = {
-                doc["_id"]: doc.get("highlights") for doc in lexical_docs
-            }
-            lexical_ids = set(highlight_by_id)
-            for doc in fused:
-                if not doc.get("highlights"):
-                    doc["highlights"] = highlight_by_id.get(doc["_id"])
-        _annotate_match_types(fused, lexical_ids, set())
-        ranked = fused
-    except OperationFailure as exc:
-        warnings.append(f"$rankFusion unavailable ({exc.code}); using application RRF.")
-        mode = "rrf"
-        try:
-            lexical_docs = list(
-                collection.aggregate(lexical_pipeline(query, search_index, limit))
-            )
-        except PyMongoError as lex_exc:
-            warnings.append(f"Atlas Search query failed: {lex_exc}")
-        try:
-            vector_docs = list(
-                collection.aggregate(
-                    vector_pipeline(query, vector_index, model, limit)
-                )
-            )
-        except PyMongoError as vec_exc:
-            warnings.append(f"Vector search query failed: {vec_exc}")
-        ranked = reciprocal_rank_fusion(lexical_docs, vector_docs)
+        mode = "keyword" if lexical_docs else None
+    except (PyMongoError, OperationFailure) as exc:
+        warnings.append(f"Atlas Search unavailable, using title/text match: {exc}")
+        lexical_docs = []
+        mode = None
 
-    serialized = [_serialize(doc) for doc in ranked]
+    if not lexical_docs:
+        fallback_docs = regex_fallback(collection, query, limit)
+        if fallback_docs:
+            lexical_docs = fallback_docs
+            mode = "fallback"
+            if not warnings:
+                warnings.append("No Atlas Search hits; used fuzzy title match.")
+
+    ranked = reciprocal_rank_fusion(lexical_docs, vector_docs)
+
+    serialized = []
+    for doc in ranked:
+        item = _serialize(doc)
+        if doc.get("snippet_html") and not (doc.get("highlights")):
+            item["snippet_html"] = doc["snippet_html"]
+        serialized.append(item)
     podcasts = group_by_episode(serialized, snippets_per_episode)
     return {
         "query": query,

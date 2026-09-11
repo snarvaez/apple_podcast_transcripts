@@ -21,6 +21,12 @@ $(function () {
     }
     if (!podcasts.length) {
       $status.attr("hidden", true);
+      if (payload.warnings && payload.warnings.length) {
+        $results.append(
+          $('<p class="error"></p>').text(payload.warnings.join(" "))
+        );
+        return;
+      }
       $results.append(
         '<p class="empty">No matching episodes for “' +
           $("<div>").text(payload.query).html() +
@@ -89,17 +95,31 @@ $(function () {
       $status.attr("hidden", true);
       return;
     }
-    $status.text("Searching…").removeAttr("hidden");
-    $.ajax({
+    $status.text("Searching keyword index… this can take about 20 seconds.").removeAttr("hidden");
+    if (runSearch._xhr && runSearch._xhr.readyState !== 4) {
+      runSearch._xhr.abort();
+    }
+    runSearch._xhr = $.ajax({
       url: "/api/search",
       data: { q: query },
       dataType: "json",
+      timeout: 60000,
     })
-      .done(render)
-      .fail(function (xhr) {
+      .done(function (payload) {
+        render(payload);
+        if (payload.warnings && payload.warnings.length && payload.podcasts && payload.podcasts.length) {
+          $status.append(" · " + payload.warnings.join(" "));
+        }
+      })
+      .fail(function (xhr, status) {
+        if (status === "abort") {
+          return;
+        }
         var message =
           (xhr.responseJSON && xhr.responseJSON.error) ||
-          "Search failed. Check MongoDB Atlas connectivity and indexes.";
+          (status === "timeout"
+            ? "Atlas keyword search took too long. Retry in a moment."
+            : "Search failed. Check MongoDB Atlas connectivity and indexes.");
         $status.attr("hidden", true);
         $results.html('<p class="error"></p>').find(".error").text(message);
       });
