@@ -29,6 +29,50 @@ def health():
         return jsonify({"ok": False, "error": str(exc)}), 503
 
 
+@bp.get("/listen")
+def listen():
+    return render_template("listen.html")
+
+
+@bp.get("/api/clip")
+def api_clip():
+    episode_id = (request.args.get("episode") or "").strip()
+    if not episode_id:
+        return jsonify({"error": "episode is required"}), 400
+    try:
+        doc = get_snippets().find_one(
+            {"episode_id": episode_id},
+            {
+                "audio_url": 1,
+                "episode_title": 1,
+                "podcast_title": 1,
+                "podcast_author": 1,
+                "episode_url": 1,
+                "spotify_episode_id": 1,
+                "apple_track_id": 1,
+                "itunes_id": 1,
+            },
+        )
+    except Exception as exc:
+        current_app.logger.exception("clip lookup failed")
+        return jsonify({"error": str(exc)}), 503
+    if not doc:
+        return jsonify({"error": "episode not found"}), 404
+    return jsonify(
+        {
+            "episode_id": episode_id,
+            "audio_url": doc.get("audio_url") or "",
+            "episode_title": doc.get("episode_title"),
+            "podcast_title": doc.get("podcast_title"),
+            "podcast_author": doc.get("podcast_author"),
+            "episode_url": doc.get("episode_url"),
+            "spotify_episode_id": doc.get("spotify_episode_id"),
+            "apple_track_id": doc.get("apple_track_id"),
+            "itunes_id": doc.get("itunes_id"),
+        }
+    )
+
+
 @bp.get("/api/search")
 def api_search():
     query = request.args.get("q", "")

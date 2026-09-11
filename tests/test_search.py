@@ -1,14 +1,40 @@
-from search_app.chunking import chunk_transcript
-from search_app.srt import srt_to_text
+from search_app.chunking import chunk_cues, chunk_transcript
+from search_app.srt import Cue, parse_srt_cues, srt_to_text
+from search_app.share import (
+    apple_listen_url,
+    primary_share_url,
+    spotify_episode_id_from_transcript_url,
+    spotify_listen_url,
+)
 from search_app.search import (
     FUZZY,
     group_by_episode,
     highlight_html,
     lexical_pipeline,
     levenshtein,
+    rank_fusion_pipeline,
     reciprocal_rank_fusion,
 )
 from search_app.transcripts import SNIPPETS
+
+
+def test_spotify_and_apple_timestamp_urls():
+    assert (
+        spotify_listen_url("0T15bGPizAqgJgQA3rnsv4", 11120)
+        == "https://open.spotify.com/episode/0T15bGPizAqgJgQA3rnsv4?t=11"
+    )
+    apple = apple_listen_url("1000771353400", 64000)
+    assert "i=1000771353400" in apple
+    assert apple.endswith("t=64") or "&t=64" in apple
+    assert primary_share_url(
+        {"spotify_episode_id": "abc"}, 5000
+    ) == "https://open.spotify.com/episode/abc?t=5"
+    assert (
+        spotify_episode_id_from_transcript_url(
+            "https://transcript-files.spotifycdn.com/0ibUtrJG4JVgwfvB2MXMSb/0T15bGPizAqgJgQA3rnsv4/transcript.srt"
+        )
+        == "0T15bGPizAqgJgQA3rnsv4"
+    )
 
 
 def test_lexical_pipeline_uses_fuzzy_on_standard_multi_fields():
@@ -23,6 +49,22 @@ def test_lexical_pipeline_uses_fuzzy_on_standard_multi_fields():
     assert "text.fuzzy" in fuzzy_paths
     assert FUZZY["maxEdits"] == 2
     assert FUZZY["prefixLength"] == 0
+
+
+def test_rank_fusion_pipeline_blends_vector_and_search():
+    pipeline = rank_fusion_pipeline(
+        "document modeling",
+        search_index="podcast_search_index",
+        vector_index="podcast_vector_index",
+        model="voyage-4",
+        limit=10,
+    )
+    fusion = pipeline[0]["$rankFusion"]["input"]["pipelines"]
+    vector = fusion["vectorPipeline"][0]["$vectorSearch"]
+    assert vector["path"] == "text"
+    assert vector["query"] == {"text": "document modeling"}
+    assert vector["model"] == "voyage-4"
+    assert "$search" in fusion["textPipeline"][0]
 
 
 def test_levenshtein_gsming_gaming():
@@ -120,6 +162,21 @@ Hello everyone.
 Welcome to <b>MongoDB</b>.
 """
     assert srt_to_text(srt) == "Hello everyone. Welcome to MongoDB."
+    cues = parse_srt_cues(srt)
+    assert cues[0].start_ms == 11120
+    assert cues[1].end_ms == 17200
+
+
+def test_chunk_cues_keeps_start_and_end():
+    cues = [
+        Cue(start_ms=1000, end_ms=2000, text="Hello there."),
+        Cue(start_ms=2000, end_ms=3500, text="This is later."),
+        Cue(start_ms=90000, end_ms=95000, text="A much later sentence that should start a new chunk because it will not fit."),
+    ]
+    chunks = chunk_cues(cues, max_chars=40)
+    assert chunks[0]["start_ms"] == 1000
+    assert chunks[0]["end_ms"] == 3500
+    assert chunks[-1]["start_ms"] == 90000
 
 
 def test_chunk_transcript_respects_max_chars():

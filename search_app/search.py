@@ -11,8 +11,10 @@ from pymongo.collection import Collection
 from pymongo.errors import OperationFailure, PyMongoError
 
 LEXICAL_MAX_TIME_MS = 15_000
+VECTOR_MAX_TIME_MS = 20_000
+RANK_FUSION_MAX_TIME_MS = 35_000
 
-VECTOR_CANDIDATES_MULTIPLIER = 20
+VECTOR_CANDIDATES_MULTIPLIER = 10
 
 # prefixLength 0 is required for first-letter typos ("gsming" vs "gaming").
 # maxEdits 2 is the Atlas Search cap (Levenshtein).
@@ -67,6 +69,12 @@ def lexical_pipeline(query: str, index: str, limit: int) -> list[dict[str, Any]]
                 "episode_id": 1,
                 "episode_title": 1,
                 "episode_url": 1,
+                "audio_url": 1,
+                "spotify_episode_id": 1,
+                "apple_track_id": 1,
+                "itunes_id": 1,
+                "start_ms": 1,
+                "end_ms": 1,
                 "published_at": 1,
                 "chunk_index": 1,
                 "text": 1,
@@ -100,6 +108,12 @@ def vector_pipeline(
                 "episode_id": 1,
                 "episode_title": 1,
                 "episode_url": 1,
+                "audio_url": 1,
+                "spotify_episode_id": 1,
+                "apple_track_id": 1,
+                "itunes_id": 1,
+                "start_ms": 1,
+                "end_ms": 1,
                 "published_at": 1,
                 "chunk_index": 1,
                 "text": 1,
@@ -141,39 +155,35 @@ def rank_fusion_pipeline(
                                     "index": search_index,
                                     "compound": {
                                         "should": [
-                                            {
-                                                "text": {
-                                                    "query": query,
-                                                    "path": "text",
-                                                    "fuzzy": {
-                                                        "maxEdits": 1,
-                                                        "prefixLength": 2,
-                                                    },
-                                                }
-                                            },
+                                            {"text": {"query": query, "path": "text"}},
                                             {
                                                 "text": {
                                                     "query": query,
                                                     "path": "episode_title",
-                                                    "score": {
-                                                        "boost": {"value": 2.0}
-                                                    },
+                                                    "score": {"boost": {"value": 2.0}},
                                                 }
                                             },
                                             {
                                                 "text": {
                                                     "query": query,
-                                                    "path": "podcast_title",
-                                                    "score": {
-                                                        "boost": {"value": 1.4}
-                                                    },
+                                                    "path": "episode_title.fuzzy",
+                                                    "fuzzy": FUZZY,
+                                                    "score": {"boost": {"value": 2.2}},
+                                                }
+                                            },
+                                            {
+                                                "text": {
+                                                    "query": query,
+                                                    "path": "text.fuzzy",
+                                                    "fuzzy": FUZZY,
+                                                    "score": {"boost": {"value": 0.8}},
                                                 }
                                             },
                                         ]
                                     },
                                     "highlight": {
-                                        "path": "text",
-                                        "maxNumPassages": 3,
+                                        "path": ["text", "episode_title"],
+                                        "maxNumPassages": 2,
                                     },
                                 }
                             },
@@ -195,6 +205,12 @@ def rank_fusion_pipeline(
                 "episode_id": 1,
                 "episode_title": 1,
                 "episode_url": 1,
+                "audio_url": 1,
+                "spotify_episode_id": 1,
+                "apple_track_id": 1,
+                "itunes_id": 1,
+                "start_ms": 1,
+                "end_ms": 1,
                 "published_at": 1,
                 "chunk_index": 1,
                 "text": 1,
@@ -284,6 +300,12 @@ def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
         "episode_id": doc.get("episode_id"),
         "episode_title": doc.get("episode_title"),
         "episode_url": doc.get("episode_url"),
+        "audio_url": doc.get("audio_url") or "",
+        "spotify_episode_id": doc.get("spotify_episode_id"),
+        "apple_track_id": doc.get("apple_track_id"),
+        "itunes_id": doc.get("itunes_id"),
+        "start_ms": doc.get("start_ms"),
+        "end_ms": doc.get("end_ms"),
         "published_at": published.isoformat() if published else None,
         "chunk_index": doc.get("chunk_index"),
         "text": doc.get("text"),
@@ -309,6 +331,10 @@ def group_by_episode(
                 "episode_id": episode_id,
                 "episode_title": doc["episode_title"],
                 "episode_url": doc["episode_url"],
+                "audio_url": doc.get("audio_url") or "",
+                "spotify_episode_id": doc.get("spotify_episode_id"),
+                "apple_track_id": doc.get("apple_track_id"),
+                "itunes_id": doc.get("itunes_id"),
                 "published_at": doc["published_at"],
                 "score": doc["score"],
                 "match_types": set(doc.get("match_types") or []),
@@ -324,6 +350,9 @@ def group_by_episode(
                     "snippet_html": doc["snippet_html"],
                     "score": doc["score"],
                     "match_types": doc.get("match_types") or [],
+                    "start_ms": doc.get("start_ms"),
+                    "end_ms": doc.get("end_ms"),
+                    "audio_url": doc.get("audio_url") or "",
                 }
             )
 
@@ -405,6 +434,12 @@ def regex_fallback(
                 "episode_id": 1,
                 "episode_title": 1,
                 "episode_url": 1,
+                "audio_url": 1,
+                "spotify_episode_id": 1,
+                "apple_track_id": 1,
+                "itunes_id": 1,
+                "start_ms": 1,
+                "end_ms": 1,
                 "published_at": 1,
                 "chunk_index": 1,
                 "text": 1,
@@ -440,6 +475,12 @@ def regex_fallback(
             "episode_id": 1,
             "episode_title": 1,
             "episode_url": 1,
+            "audio_url": 1,
+            "spotify_episode_id": 1,
+            "apple_track_id": 1,
+            "itunes_id": 1,
+            "start_ms": 1,
+            "end_ms": 1,
             "published_at": 1,
             "chunk_index": 1,
             "text": 1,
@@ -478,7 +519,6 @@ def search_topic(
     limit: int,
     snippets_per_episode: int,
 ) -> dict[str, Any]:
-    _ = (vector_index, model)
     query = (query or "").strip()
     if not query:
         return {"query": query, "mode": None, "podcasts": [], "total_snippets": 0}
@@ -486,31 +526,64 @@ def search_topic(
     lexical_docs: list[dict[str, Any]] = []
     vector_docs: list[dict[str, Any]] = []
     warnings: list[str] = []
+    ranked: list[dict[str, Any]] = []
+    mode: str | None = None
 
-    # Keyword-only on the request path. Voyage $vectorSearch shares the TLS
-    # pool and was stalling the whole request, so the browser timed out before
-    # lexical results could render.
     try:
-        lexical_docs = _run_aggregate(
+        fused = _run_aggregate(
             collection,
-            lexical_pipeline(query, search_index, limit),
-            LEXICAL_MAX_TIME_MS,
+            rank_fusion_pipeline(
+                query,
+                search_index=search_index,
+                vector_index=vector_index,
+                model=model,
+                limit=limit,
+            ),
+            RANK_FUSION_MAX_TIME_MS,
         )
-        mode = "keyword" if lexical_docs else None
+        if fused:
+            for doc in fused:
+                doc["match_types"] = ["keyword", "semantic"]
+            ranked = fused
+            mode = "rankFusion"
     except (PyMongoError, OperationFailure) as exc:
-        warnings.append(f"Atlas Search unavailable, using title/text match: {exc}")
-        lexical_docs = []
-        mode = None
+        warnings.append(f"$rankFusion unavailable ({exc}); combining pipelines.")
 
-    if not lexical_docs:
-        fallback_docs = regex_fallback(collection, query, limit)
-        if fallback_docs:
-            lexical_docs = fallback_docs
+    if not ranked:
+        try:
+            lexical_docs = _run_aggregate(
+                collection,
+                lexical_pipeline(query, search_index, limit),
+                LEXICAL_MAX_TIME_MS,
+            )
+        except (PyMongoError, OperationFailure) as exc:
+            warnings.append(f"Atlas Search unavailable: {exc}")
+        try:
+            vector_docs = _run_aggregate(
+                collection,
+                vector_pipeline(query, vector_index, model, limit),
+                VECTOR_MAX_TIME_MS,
+            )
+        except (PyMongoError, OperationFailure) as exc:
+            warnings.append(f"Vector search unavailable: {exc}")
+        used_fallback = False
+        if not lexical_docs:
+            fallback_docs = regex_fallback(collection, query, limit)
+            if fallback_docs:
+                lexical_docs = fallback_docs
+                used_fallback = True
+                warnings.append("No Atlas Search hits; used title/text match.")
+        ranked = reciprocal_rank_fusion(lexical_docs, vector_docs)
+        if lexical_docs and vector_docs:
+            mode = "rrf"
+        elif used_fallback:
             mode = "fallback"
-            if not warnings:
-                warnings.append("No Atlas Search hits; used fuzzy title match.")
-
-    ranked = reciprocal_rank_fusion(lexical_docs, vector_docs)
+        elif lexical_docs:
+            mode = "keyword"
+        elif vector_docs:
+            mode = "semantic"
+        else:
+            mode = None
 
     serialized = []
     for doc in ranked:

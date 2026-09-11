@@ -15,13 +15,12 @@ from pymongo import MongoClient, UpdateOne
 from pymongo.collection import Collection
 from pymongo.server_api import ServerApi
 
-from .chunking import chunk_transcript
+from .chunking import chunk_cues, chunk_transcript
 from .config import Config
-from .rss import Episode, fetch_bytes, fetch_text, parse_feed
-from .srt import srt_to_text
+from .rss import FEED_URL, Episode, fetch_bytes, fetch_text, parse_feed
+from .srt import Cue, parse_srt_cues, srt_to_text, whisper_segments_to_cues
 
 APPLE_URL = "https://podcasts.apple.com/us/podcast/the-mongodb-podcast/id1500452446"
-FEED_URL = "https://anchor.fm/s/1004c5698/podcast/rss"
 PODCAST_ID = "mongodb-podcast"
 ITUNES_ID = "1500452446"
 CHUNK_CHARS = 900
@@ -62,15 +61,21 @@ def upsert_episode(
     episode: Episode,
     show_title: str,
     author: str,
-    text: str,
+    text: str | None = None,
+    cues: list[Cue] | None = None,
     source: str,
 ) -> int:
-    chunks = chunk_transcript(text, max_chars=CHUNK_CHARS)
-    if not chunks:
+    timed = chunk_cues(cues, max_chars=CHUNK_CHARS) if cues else []
+    if not timed and text:
+        timed = [
+            {"text": chunk, "start_ms": None, "end_ms": None}
+            for chunk in chunk_transcript(text, max_chars=CHUNK_CHARS)
+        ]
+    if not timed:
         return 0
     ops = []
     now = datetime.now(timezone.utc)
-    for index, chunk in enumerate(chunks):
+    for index, chunk in enumerate(timed):
         doc = {
             "podcast_id": PODCAST_ID,
             "podcast_title": show_title,
@@ -79,13 +84,20 @@ def upsert_episode(
             "episode_id": episode.guid,
             "episode_title": episode.title,
             "episode_url": episode.link or APPLE_URL,
+            "audio_url": episode.audio_url or "",
             "published_at": episode.published_at,
             "duration": episode.duration,
             "chunk_index": index,
-            "text": chunk,
+            "text": chunk["text"],
+            "start_ms": chunk.get("start_ms"),
+            "end_ms": chunk.get("end_ms"),
             "source": source,
             "ingested_at": now,
         }
+        if episode.spotify_episode_id:
+            doc["spotify_episode_id"] = episode.spotify_episode_id
+        if episode.anchor_id:
+            doc["anchor_id"] = episode.anchor_id
         ops.append(
             UpdateOne(
                 {"episode_id": episode.guid, "chunk_index": index},
@@ -95,14 +107,20 @@ def upsert_episode(
         )
     collection.bulk_write(ops, ordered=False)
     collection.delete_many(
-        {"episode_id": episode.guid, "chunk_index": {"$gte": len(chunks)}}
+        {"episode_id": episode.guid, "chunk_index": {"$gte": len(timed)}}
     )
-    return len(chunks)
+    return len(timed)
 
 
-def already_ingested(collection: Collection, episode_id: str) -> bool:
+def has_timed_chunks(collection: Collection, episode_id: str) -> bool:
     def _count():
-        return collection.count_documents({"episode_id": episode_id}, limit=1) > 0
+        return (
+            collection.count_documents(
+                {"episode_id": episode_id, "start_ms": {"$gte": 0}},
+                limit=1,
+            )
+            > 0
+        )
 
     try:
         return retry_mongo(_count, attempts=5, label="count")
@@ -122,20 +140,26 @@ def ingest_srt_episodes(
     ingested = skipped = failed = 0
     with_srt = [ep for ep in episodes if ep.transcript_url]
     for i, episode in enumerate(with_srt, start=1):
-        if not force and already_ingested(collection, episode.guid):
+        if not force and has_timed_chunks(collection, episode.guid):
             skipped += 1
             continue
         try:
             srt = fetch_text(episode.transcript_url, timeout=45)
-            text = srt_to_text(srt)
-            if not text:
-                raise ValueError("empty transcript")
+            cues = parse_srt_cues(srt)
+            if not cues:
+                text = srt_to_text(srt)
+                if not text:
+                    raise ValueError("empty transcript")
+                cues = None
+            else:
+                text = None
             n = upsert_episode(
                 collection,
                 episode=episode,
                 show_title=show_title,
                 author=author,
                 text=text,
+                cues=cues,
                 source="spotify-srt",
             )
             ingested += 1
@@ -147,7 +171,7 @@ def ingest_srt_episodes(
     return ingested, skipped, failed
 
 
-def transcribe_audio(path: str, model: str) -> str:
+def transcribe_audio(path: str, model: str) -> dict:
     import mlx_whisper
 
     result = mlx_whisper.transcribe(
@@ -155,8 +179,9 @@ def transcribe_audio(path: str, model: str) -> str:
         path_or_hf_repo=model,
         language="en",
         verbose=False,
+        word_timestamps=False,
     )
-    return (result.get("text") or "").strip()
+    return result or {}
 
 
 def ingest_missing_with_whisper(
@@ -176,39 +201,57 @@ def ingest_missing_with_whisper(
     missing = [ep for ep in episodes if not ep.transcript_url]
     ingested = skipped = failed = 0
     for i, episode in enumerate(missing, start=1):
-        if not force and already_ingested(collection, episode.guid):
+        if not force and has_timed_chunks(collection, episode.guid):
             skipped += 1
             continue
         if not episode.audio_url:
             failed += 1
             print(f"[{i}/{len(missing)}] no audio  {episode.title[:70]}", file=sys.stderr)
             continue
-        text_path = os.path.join(workdir, f"{episode.guid}.txt")
+        import json
+
+        cache_path = os.path.join(workdir, f"{episode.guid}.segments.json")
         tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False, dir=workdir)
         tmp.close()
         try:
-            if os.path.exists(text_path) and os.path.getsize(text_path) > 0:
-                with open(text_path, encoding="utf-8") as fh:
-                    text = fh.read().strip()
+            cues: list[Cue] = []
+            if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
+                with open(cache_path, encoding="utf-8") as fh:
+                    cached = json.load(fh)
+                cues = whisper_segments_to_cues(cached.get("segments") or [])
                 print(f"[{i}/{len(missing)}] resume from cache {episode.title[:80]}")
-            else:
+            if not cues:
                 print(f"[{i}/{len(missing)}] downloading {episode.title[:80]}")
                 audio = fetch_bytes(episode.audio_url, timeout=180)
                 with open(tmp.name, "wb") as fh:
                     fh.write(audio)
                 print(f"[{i}/{len(missing)}] transcribing {len(audio)} bytes")
-                text = transcribe_audio(tmp.name, model)
-                if not text:
+                result = transcribe_audio(tmp.name, model)
+                cues = whisper_segments_to_cues(result.get("segments") or [])
+                if not cues:
                     raise ValueError("empty whisper output")
-                with open(text_path, "w", encoding="utf-8") as fh:
-                    fh.write(text)
+                with open(cache_path, "w", encoding="utf-8") as fh:
+                    json.dump(
+                        {
+                            "text": result.get("text") or "",
+                            "segments": [
+                                {
+                                    "start": float(seg.get("start") or 0),
+                                    "end": float(seg.get("end") or 0),
+                                    "text": seg.get("text") or "",
+                                }
+                                for seg in (result.get("segments") or [])
+                            ],
+                        },
+                        fh,
+                    )
             n = retry_mongo(
                 lambda: upsert_episode(
                     collection,
                     episode=episode,
                     show_title=show_title,
                     author=author,
-                    text=text,
+                    cues=cues,
                     source=f"whisper:{model}",
                 ),
                 attempts=8,
