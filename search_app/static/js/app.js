@@ -51,6 +51,20 @@ $(function () {
 
   function nativeHref(episode, startMs) {
     var sec = shareSeconds(startMs);
+    var yt =
+      (episode && episode.youtube_video_id) ||
+      (function () {
+        try {
+          var u = episode && episode.episode_url;
+          if (u && u.indexOf("youtube.com/watch") >= 0) {
+            return new URL(u).searchParams.get("v");
+          }
+        } catch (err) {}
+        return "";
+      })();
+    if (yt) {
+      return "https://www.youtube.com/watch?v=" + yt + "&t=" + sec + "s";
+    }
     if (episode && episode.spotify_episode_id) {
       return (
         "https://open.spotify.com/episode/" +
@@ -109,6 +123,7 @@ $(function () {
       spotify_episode_id: episode.spotify_episode_id,
       apple_track_id: episode.apple_track_id,
       itunes_id: episode.itunes_id,
+      youtube_video_id: episode.youtube_video_id,
       audio_url: snippet.audio_url || episode.audio_url || "",
     };
   }
@@ -234,6 +249,10 @@ $(function () {
   }
 
   function playFrom(startMs, audioUrl, title, href) {
+    if (href && href.indexOf("youtube.com") >= 0) {
+      window.open(href, "_blank", "noopener");
+      return;
+    }
     if (audioUrl) {
       var audio = document.getElementById("player-audio");
       $("#player").removeAttr("hidden");
@@ -333,8 +352,9 @@ $(function () {
           var $row = $('<div class="snippet-row"></div>');
           $row.append($('<p class="snippet"></p>').html(snippet.snippet_html));
           if (snippet.start_ms != null && snippet.start_ms !== "") {
+            var isYt = (clip.href || "").indexOf("youtube.com") >= 0;
             var $play = $('<button type="button" class="play-at"></button>')
-              .text("Play " + formatClock(snippet.start_ms))
+              .text((isYt ? "Watch " : "Play ") + formatClock(snippet.start_ms))
               .attr({
                 "data-start": snippet.start_ms,
                 "data-audio": clip.audio_url,

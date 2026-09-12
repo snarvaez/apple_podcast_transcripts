@@ -5,6 +5,7 @@ from search_app.share import (
     primary_share_url,
     spotify_episode_id_from_transcript_url,
     spotify_listen_url,
+    youtube_listen_url,
 )
 from search_app.search import (
     FUZZY,
@@ -19,6 +20,13 @@ from search_app.transcripts import SNIPPETS
 
 
 def test_spotify_and_apple_timestamp_urls():
+    assert youtube_listen_url("T323-B5v1oI", 64000) == (
+        "https://www.youtube.com/watch?v=T323-B5v1oI&t=64s"
+    )
+    assert (
+        primary_share_url({"youtube_video_id": "abc"}, 5000)
+        == "https://www.youtube.com/watch?v=abc&t=5s"
+    )
     assert (
         spotify_listen_url("0T15bGPizAqgJgQA3rnsv4", 11120)
         == "https://open.spotify.com/episode/0T15bGPizAqgJgQA3rnsv4?t=11"

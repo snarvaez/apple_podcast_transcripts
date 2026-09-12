@@ -91,6 +91,28 @@ Pulls the RSS feed for [The MongoDB Podcast](https://podcasts.apple.com/us/podca
 python -m search_app.ingest --transcribe
 ```
 
+YouTube (MongoDB channel captions, same chunk + auto-embed + timestamp flow):
+
+```bash
+python -m search_app.youtube_ingest
+```
+
+Uses `yt-dlp` to list https://www.youtube.com/user/mongodb and timed English captions. Share links are `https://www.youtube.com/watch?v=ID&t=123s`.
+
+YouTube blocks datacenter IPs and bursts. Run from a home/residential network, captions only (no audio download), in small daily batches:
+
+```bash
+python -m search_app.youtube_ingest --max-new 40 --delay 8
+```
+
+To keep going overnight (skips finished videos; exponential backoff on IP block: 15 min → 30 min → … cap 6 h):
+
+```bash
+python -m search_app.youtube_loop --max-new 40 --delay 8 --batch-pause 600
+```
+
+Ctrl+C stops the loop. Already-ingested videos are skipped.
+
 ### Tests that do not need Atlas
 
 ```bash

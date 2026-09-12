@@ -65,9 +65,17 @@ def apple_listen_url(track_id: str | int, start_ms: Any, collection_id: str | No
     )
 
 
+def youtube_listen_url(video_id: str, start_ms: Any) -> str:
+    seconds = seconds_from_ms(start_ms)
+    return f"https://www.youtube.com/watch?v={video_id}&t={seconds}s"
+
+
 def primary_share_url(doc: dict[str, Any], start_ms: Any = None) -> str:
-    """Prefer Spotify (reliable t=), then Apple, else empty for local /listen fallback."""
+    """YouTube &t=Ns, then Spotify ?t=, then Apple ?t=, else empty for /listen."""
     ms = start_ms if start_ms is not None else doc.get("start_ms")
+    youtube_id = doc.get("youtube_video_id")
+    if youtube_id:
+        return youtube_listen_url(youtube_id, ms)
     spotify_id = doc.get("spotify_episode_id")
     if spotify_id:
         return spotify_listen_url(spotify_id, ms)
