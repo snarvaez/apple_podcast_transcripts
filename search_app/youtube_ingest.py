@@ -13,6 +13,7 @@ from pymongo.collection import Collection
 from .chunking import chunk_cues
 from .config import Config
 from .ingest import CHUNK_CHARS, _client, retry_mongo
+from .schema import snippet_document
 from .youtube import (
     PODCAST_AUTHOR,
     PODCAST_ID,
@@ -33,26 +34,27 @@ def upsert_video(collection: Collection, video: YoutubeVideo, cues, source: str)
         duration = str(int(video.duration))
     ops = []
     for index, chunk in enumerate(chunks):
-        doc = {
-            "podcast_id": PODCAST_ID,
-            "podcast_title": PODCAST_TITLE,
-            "podcast_author": PODCAST_AUTHOR,
-            "media_kind": "youtube",
-            "youtube_video_id": video.video_id,
-            "episode_id": video.video_id,
-            "episode_title": video.title,
-            "episode_url": f"https://www.youtube.com/watch?v={video.video_id}",
-            "audio_url": "",
-            "published_at": video.published_at,
-            "duration": duration,
-            "chunk_index": index,
-            "text": chunk["text"],
-            "start_ms": chunk.get("start_ms"),
-            "end_ms": chunk.get("end_ms"),
-            "source": source,
-            "ingested_at": now,
-            "ingest_complete": True,
-        }
+        doc = snippet_document(
+            source_kind="youtube",
+            source_id=PODCAST_ID,
+            source_title=PODCAST_TITLE,
+            source_author=PODCAST_AUTHOR,
+            item_id=video.video_id,
+            item_title=video.title,
+            item_url=f"https://www.youtube.com/watch?v={video.video_id}",
+            chunk_index=index,
+            text=chunk["text"],
+            youtube_video_id=video.video_id,
+            audio_url="",
+            published_at=video.published_at,
+            duration=duration,
+            start_ms=chunk.get("start_ms"),
+            end_ms=chunk.get("end_ms"),
+            source=source,
+            ingest_source=source,
+            ingested_at=now,
+            ingest_complete=True,
+        )
         ops.append(
             UpdateOne(
                 {"episode_id": video.video_id, "chunk_index": index},

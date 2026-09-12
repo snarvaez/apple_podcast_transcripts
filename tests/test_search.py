@@ -1,3 +1,4 @@
+from search_app.schema import coerce, snippet_document
 from search_app.chunking import chunk_cues, chunk_transcript
 from search_app.srt import Cue, parse_srt_cues, srt_to_text
 from search_app.share import (
@@ -17,6 +18,40 @@ from search_app.search import (
     reciprocal_rank_fusion,
 )
 from search_app.transcripts import SNIPPETS
+
+
+def test_coerce_maps_legacy_podcast_fields():
+    doc = coerce(
+        {
+            "podcast_id": "mongodb-podcast",
+            "podcast_title": "The MongoDB Podcast",
+            "episode_id": "abc",
+            "episode_title": "Hello",
+            "episode_url": "https://example.test",
+            "text": "hi",
+        }
+    )
+    assert doc["source_kind"] == "podcast"
+    assert doc["source_id"] == "mongodb-podcast"
+    assert doc["item_id"] == "abc"
+    assert doc["item_title"] == "Hello"
+
+
+def test_snippet_document_dual_writes_aliases():
+    doc = snippet_document(
+        source_kind="youtube",
+        source_id="mongodb-youtube",
+        source_title="MongoDB on YouTube",
+        source_author="MongoDB",
+        item_id="vid1",
+        item_title="Talk",
+        item_url="https://youtu.be/vid1",
+        chunk_index=0,
+        text="hello",
+    )
+    assert doc["episode_id"] == "vid1"
+    assert doc["podcast_id"] == "mongodb-youtube"
+    assert doc["schema_version"] == 2
 
 
 def test_spotify_and_apple_timestamp_urls():
@@ -53,6 +88,7 @@ def test_lexical_pipeline_uses_fuzzy_on_standard_multi_fields():
         for clause in clauses
         if clause["text"].get("fuzzy")
     }
+    assert "item_title.fuzzy" in fuzzy_paths
     assert "episode_title.fuzzy" in fuzzy_paths
     assert "text.fuzzy" in fuzzy_paths
     assert FUZZY["maxEdits"] == 2

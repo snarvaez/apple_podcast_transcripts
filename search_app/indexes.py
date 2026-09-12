@@ -19,28 +19,36 @@ EMBEDDING_MODEL = "voyage-4"
 SNIPPET_VALIDATOR: dict[str, Any] = {
     "$jsonSchema": {
         "bsonType": "object",
-        "required": [
-            "podcast_id",
-            "podcast_title",
-            "episode_id",
-            "episode_title",
-            "chunk_index",
-            "text",
-        ],
+        "required": ["chunk_index", "text"],
         "properties": {
-            "podcast_id": {"bsonType": "string", "minLength": 1},
-            "podcast_title": {"bsonType": "string", "minLength": 1},
-            "podcast_author": {"bsonType": "string"},
-            "episode_id": {"bsonType": "string", "minLength": 1},
-            "episode_title": {"bsonType": "string", "minLength": 1},
-            "episode_url": {"bsonType": "string"},
+            "schema_version": {"bsonType": ["int", "long"]},
+            "source_kind": {
+                "enum": [
+                    "podcast",
+                    "youtube",
+                    "github",
+                    "blog",
+                    "social",
+                    "docs",
+                    "other",
+                ]
+            },
+            "source_id": {"bsonType": "string"},
+            "source_title": {"bsonType": "string"},
+            "item_id": {"bsonType": "string"},
+            "item_title": {"bsonType": "string"},
+            "item_url": {"bsonType": "string"},
+            "podcast_id": {"bsonType": "string"},
+            "episode_id": {"bsonType": "string"},
             "published_at": {"bsonType": "date"},
             "chunk_index": {"bsonType": ["int", "long"], "minimum": 0},
+            "start_ms": {"bsonType": ["int", "long", "null"]},
+            "end_ms": {"bsonType": ["int", "long", "null"]},
             "text": {
                 "bsonType": "string",
                 "minLength": 1,
                 "maxLength": 8000,
-                "description": "Bounded transcript passage for search and auto-embed.",
+                "description": "Bounded passage for search and Voyage auto-embed.",
             },
         },
     }
@@ -54,6 +62,9 @@ VECTOR_INDEX_DEFINITION: dict[str, Any] = {
             "model": EMBEDDING_MODEL,
             "modality": "text",
         },
+        {"type": "filter", "path": "source_kind"},
+        {"type": "filter", "path": "source_id"},
+        {"type": "filter", "path": "item_id"},
         {"type": "filter", "path": "podcast_id"},
         {"type": "filter", "path": "episode_id"},
     ]
@@ -82,8 +93,13 @@ SEARCH_INDEX_DEFINITION: dict[str, Any] = {
         "dynamic": False,
         "fields": {
             "text": _string_with_fuzzy(),
+            "item_title": _string_with_fuzzy(),
+            "source_title": _string_with_fuzzy(),
             "episode_title": _string_with_fuzzy(),
             "podcast_title": _string_with_fuzzy(),
+            "source_kind": {"type": "token"},
+            "source_id": {"type": "token"},
+            "item_id": {"type": "token"},
             "podcast_id": {"type": "token"},
             "episode_id": {"type": "token"},
         },
@@ -109,8 +125,21 @@ def ensure_classic_indexes(collection: Collection) -> None:
         name="episode_chunk",
     )
     collection.create_index(
+        [("item_id", 1), ("chunk_index", 1)],
+        unique=True,
+        name="item_chunk",
+    )
+    collection.create_index(
         [("podcast_id", 1), ("published_at", -1)],
         name="podcast_published",
+    )
+    collection.create_index(
+        [("source_id", 1), ("published_at", -1)],
+        name="source_published",
+    )
+    collection.create_index(
+        [("source_kind", 1), ("published_at", -1)],
+        name="kind_published",
     )
 
 
@@ -149,6 +178,8 @@ def ensure_search_indexes(
                 collection.create_search_indexes(pending)
             if search_name in existing:
                 collection.update_search_index(search_name, SEARCH_INDEX_DEFINITION)
+            if vector_name in existing:
+                collection.update_search_index(vector_name, VECTOR_INDEX_DEFINITION)
             return
         except Exception as exc:
             last_error = exc

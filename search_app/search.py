@@ -10,6 +10,8 @@ import re
 from pymongo.collection import Collection
 from pymongo.errors import OperationFailure, PyMongoError
 
+from .schema import SNIPPET_PROJECT, coerce
+
 LEXICAL_MAX_TIME_MS = 15_000
 VECTOR_MAX_TIME_MS = 20_000
 RANK_FUSION_MAX_TIME_MS = 35_000
@@ -21,69 +23,79 @@ VECTOR_CANDIDATES_MULTIPLIER = 10
 FUZZY = {"maxEdits": 2, "prefixLength": 0, "maxExpansions": 50}
 
 
+def _hit_project(score_meta: str, *, highlights: bool = False) -> dict[str, Any]:
+    proj = dict(SNIPPET_PROJECT)
+    proj["score"] = {"$meta": score_meta}
+    if highlights:
+        proj["highlights"] = {"$meta": "searchHighlights"}
+    return {"$project": proj}
+
+
+def _title_should(query: str) -> list[dict[str, Any]]:
+    return [
+        {"text": {"query": query, "path": "text"}},
+        {
+            "text": {
+                "query": query,
+                "path": "item_title",
+                "score": {"boost": {"value": 2.0}},
+            }
+        },
+        {
+            "text": {
+                "query": query,
+                "path": "episode_title",
+                "score": {"boost": {"value": 2.0}},
+            }
+        },
+        {
+            "text": {
+                "query": query,
+                "path": "item_title.fuzzy",
+                "fuzzy": FUZZY,
+                "score": {"boost": {"value": 2.2}},
+            }
+        },
+        {
+            "text": {
+                "query": query,
+                "path": "episode_title.fuzzy",
+                "fuzzy": FUZZY,
+                "score": {"boost": {"value": 2.2}},
+            }
+        },
+        {
+            "text": {
+                "query": query,
+                "path": "source_title",
+                "score": {"boost": {"value": 1.3}},
+            }
+        },
+        {
+            "text": {
+                "query": query,
+                "path": "text.fuzzy",
+                "fuzzy": FUZZY,
+                "score": {"boost": {"value": 0.8}},
+            }
+        },
+    ]
+
+
 def lexical_pipeline(query: str, index: str, limit: int) -> list[dict[str, Any]]:
     return [
         {
             "$search": {
                 "index": index,
-                "compound": {
-                    "should": [
-                        {"text": {"query": query, "path": "text"}},
-                        {
-                            "text": {
-                                "query": query,
-                                "path": "episode_title",
-                                "score": {"boost": {"value": 2.0}},
-                            }
-                        },
-                        {
-                            "text": {
-                                "query": query,
-                                "path": "episode_title.fuzzy",
-                                "fuzzy": FUZZY,
-                                "score": {"boost": {"value": 2.2}},
-                            }
-                        },
-                        {
-                            "text": {
-                                "query": query,
-                                "path": "text.fuzzy",
-                                "fuzzy": FUZZY,
-                                "score": {"boost": {"value": 0.8}},
-                            }
-                        },
-                    ]
-                },
+                "compound": {"should": _title_should(query)},
                 "highlight": {
-                    "path": ["text", "episode_title"],
+                    "path": ["text", "item_title", "episode_title"],
                     "maxNumPassages": 2,
                 },
             }
         },
         {"$limit": limit},
-        {
-            "$project": {
-                "podcast_id": 1,
-                "podcast_title": 1,
-                "podcast_author": 1,
-                "episode_id": 1,
-                "episode_title": 1,
-                "episode_url": 1,
-                "audio_url": 1,
-                "spotify_episode_id": 1,
-                "apple_track_id": 1,
-                "itunes_id": 1,
-                "youtube_video_id": 1,
-                "media_kind": 1,
-                "start_ms": 1,
-                "end_ms": 1,
-                "published_at": 1,
-                "chunk_index": 1,
-                "text": 1,
-                "score": {"$meta": "searchScore"},
-                "highlights": {"$meta": "searchHighlights"},
-            }
-        },
+        _hit_project("searchScore", highlights=True),
     ]
 
 
@@ -102,28 +114,7 @@ def vector_pipeline(
                 "limit": limit,
             }
         },
-        {
-            "$project": {
-                "podcast_id": 1,
-                "podcast_title": 1,
-                "podcast_author": 1,
-                "episode_id": 1,
-                "episode_title": 1,
-                "episode_url": 1,
-                "audio_url": 1,
-                "spotify_episode_id": 1,
-                "apple_track_id": 1,
-                "itunes_id": 1,
-                "youtube_video_id": 1,
-                "media_kind": 1,
-                "start_ms": 1,
-                "end_ms": 1,
-                "published_at": 1,
-                "chunk_index": 1,
-                "text": 1,
-                "score": {"$meta": "vectorSearchScore"},
-            }
-        },
+        _hit_project("vectorSearchScore"),
     ]
 
 
@@ -157,36 +148,9 @@ def rank_fusion_pipeline(
                             {
                                 "$search": {
                                     "index": search_index,
-                                    "compound": {
-                                        "should": [
-                                            {"text": {"query": query, "path": "text"}},
-                                            {
-                                                "text": {
-                                                    "query": query,
-                                                    "path": "episode_title",
-                                                    "score": {"boost": {"value": 2.0}},
-                                                }
-                                            },
-                                            {
-                                                "text": {
-                                                    "query": query,
-                                                    "path": "episode_title.fuzzy",
-                                                    "fuzzy": FUZZY,
-                                                    "score": {"boost": {"value": 2.2}},
-                                                }
-                                            },
-                                            {
-                                                "text": {
-                                                    "query": query,
-                                                    "path": "text.fuzzy",
-                                                    "fuzzy": FUZZY,
-                                                    "score": {"boost": {"value": 0.8}},
-                                                }
-                                            },
-                                        ]
-                                    },
+                                    "compound": {"should": _title_should(query)},
                                     "highlight": {
-                                        "path": ["text", "episode_title"],
+                                        "path": ["text", "item_title", "episode_title"],
                                         "maxNumPassages": 2,
                                     },
                                 }
@@ -201,29 +165,7 @@ def rank_fusion_pipeline(
             }
         },
         {"$limit": limit},
-        {
-            "$project": {
-                "podcast_id": 1,
-                "podcast_title": 1,
-                "podcast_author": 1,
-                "episode_id": 1,
-                "episode_title": 1,
-                "episode_url": 1,
-                "audio_url": 1,
-                "spotify_episode_id": 1,
-                "apple_track_id": 1,
-                "itunes_id": 1,
-                "youtube_video_id": 1,
-                "media_kind": 1,
-                "start_ms": 1,
-                "end_ms": 1,
-                "published_at": 1,
-                "chunk_index": 1,
-                "text": 1,
-                "score": {"$meta": "score"},
-                "highlights": {"$meta": "searchHighlights"},
-            }
-        },
+        _hit_project("score", highlights=True),
     ]
 
 
@@ -298,8 +240,16 @@ def _escape(value: str) -> str:
 
 def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
     published = doc.get("published_at")
+    doc = coerce(doc)
     return {
         "id": str(doc.get("_id", "")),
+        "source_kind": doc.get("source_kind"),
+        "source_id": doc.get("source_id"),
+        "source_title": doc.get("source_title"),
+        "source_author": doc.get("source_author"),
+        "item_id": doc.get("item_id"),
+        "item_title": doc.get("item_title"),
+        "item_url": doc.get("item_url"),
         "podcast_id": doc.get("podcast_id"),
         "podcast_title": doc.get("podcast_title"),
         "podcast_author": doc.get("podcast_author"),
@@ -311,7 +261,7 @@ def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
         "apple_track_id": doc.get("apple_track_id"),
         "itunes_id": doc.get("itunes_id"),
         "youtube_video_id": doc.get("youtube_video_id"),
-        "media_kind": doc.get("media_kind") or "podcast",
+        "media_kind": doc.get("source_kind") or doc.get("media_kind") or "podcast",
         "start_ms": doc.get("start_ms"),
         "end_ms": doc.get("end_ms"),
         "published_at": published.isoformat() if published else None,
@@ -329,7 +279,7 @@ def group_by_episode(
     episodes: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for doc in docs:
-        episode_id = doc["episode_id"]
+        episode_id = doc.get("item_id") or doc.get("episode_id")
         if episode_id not in episodes:
             order.append(episode_id)
             episodes[episode_id] = {

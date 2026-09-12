@@ -18,6 +18,7 @@ from pymongo.server_api import ServerApi
 from .chunking import chunk_cues, chunk_transcript
 from .config import Config
 from .rss import FEED_URL, Episode, fetch_bytes, fetch_text, parse_feed
+from .schema import snippet_document
 from .srt import Cue, parse_srt_cues, srt_to_text, whisper_segments_to_cues
 
 APPLE_URL = "https://podcasts.apple.com/us/podcast/the-mongodb-podcast/id1500452446"
@@ -76,28 +77,28 @@ def upsert_episode(
     ops = []
     now = datetime.now(timezone.utc)
     for index, chunk in enumerate(timed):
-        doc = {
-            "podcast_id": PODCAST_ID,
-            "podcast_title": show_title,
-            "podcast_author": author,
-            "itunes_id": ITUNES_ID,
-            "episode_id": episode.guid,
-            "episode_title": episode.title,
-            "episode_url": episode.link or APPLE_URL,
-            "audio_url": episode.audio_url or "",
-            "published_at": episode.published_at,
-            "duration": episode.duration,
-            "chunk_index": index,
-            "text": chunk["text"],
-            "start_ms": chunk.get("start_ms"),
-            "end_ms": chunk.get("end_ms"),
-            "source": source,
-            "ingested_at": now,
-        }
-        if episode.spotify_episode_id:
-            doc["spotify_episode_id"] = episode.spotify_episode_id
-        if episode.anchor_id:
-            doc["anchor_id"] = episode.anchor_id
+        doc = snippet_document(
+            source_kind="podcast",
+            source_id=PODCAST_ID,
+            source_title=show_title,
+            source_author=author,
+            item_id=episode.guid,
+            item_title=episode.title,
+            item_url=episode.link or APPLE_URL,
+            chunk_index=index,
+            text=chunk["text"],
+            itunes_id=ITUNES_ID,
+            audio_url=episode.audio_url or "",
+            published_at=episode.published_at,
+            duration=episode.duration,
+            start_ms=chunk.get("start_ms"),
+            end_ms=chunk.get("end_ms"),
+            source=source,
+            ingest_source=source,
+            ingested_at=now,
+            spotify_episode_id=episode.spotify_episode_id,
+            anchor_id=episode.anchor_id,
+        )
         ops.append(
             UpdateOne(
                 {"episode_id": episode.guid, "chunk_index": index},
